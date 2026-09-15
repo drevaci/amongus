@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Among Us – Hry</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">AMONG US</div>
+  <nav>
+    <button onclick="openPanel('create')">Vytvoriť</button>
+    <button class="red" onclick="openPanel('join')">Hrať</button>
+  </nav>
+</header>
+
+<main>
+  <div class="card">
+    <h1>Among Us</h1>
+    <p>Vytvor miestnosť alebo sa pripoj pomocou kódu.</p>
+    <div class="buttons">
+      <button class="big red" onclick="openPanel('create')">Vytvoriť hru</button>
+      <button class="big" onclick="openPanel('join')">Hrať</button>
+    </div>
+  </div>
+</main>
+
+<div id="modal" class="modal">
+<div class="modal-box">
+<button class="x" onclick="closePanel()">×</button>
+
+<section id="create" class="panel">
+  <h2>Vytvoriť hru</h2>
+  <input id="hostName" maxlength="16" placeholder="Tvoje meno">
+  <button class="big red" onclick="createRoom()">Pokračovať</button>
+  <p class="hint">Po vytvorení nastavíš úlohy pre hru.</p>
+</section>
+
+<section id="join" class="panel">
+  <h2>Hrať</h2>
+  <input id="playerName" maxlength="16" placeholder="Tvoje meno">
+  <input id="roomCodeInput" maxlength="6" placeholder="Kód miestnosti">
+  <button class="big red" onclick="joinRoom()">Pripojiť sa</button>
+</section>
+
+<section id="tasks" class="panel">
+  <h2>Úlohy</h2>
+  <p class="hint">Pred spustením hry musí hostiteľ pridať aspoň jednu úlohu.</p>
+  <div id="taskList"></div>
+  <div class="task-form">
+    <input id="taskLocation" maxlength="30" placeholder="Miesto (napr. Elektrika)">
+    <input id="taskName" maxlength="60" placeholder="Úloha (napr. Opraviť káble)">
+    <button class="big" onclick="addTask()">＋ Pridať úlohu</button>
+  </div>
+  <button class="big red" onclick="continueToLobby()">Pokračovať do lobby</button>
+  <p id="taskStatus" class="status"></p>
+</section>
+
+<section id="lobby" class="panel">
+  <h2>Miestnosť <span id="roomCode"></span></h2>
+  <p class="hint">Pošli kód kamarátom.</p>
+  <div id="players"></div>
+  <h3>Úlohy v hre</h3>
+  <div id="lobbyTasks"></div>
+  <button id="editTasksBtn" class="big" onclick="openPanel('tasks')">Upraviť úlohy</button>
+  <button id="startBtn" class="big red" onclick="startGame()">Spustiť hru</button>
+  <p id="lobbyStatus" class="status"></p>
+</section>
+
+<section id="game" class="panel">
+  <h2>Hra začína!</h2>
+  <p id="roleText"></p>
+  <h3>Moje úlohy</h3>
+  <div id="myTasks"></div>
+  <h3>Hráči</h3>
+  <div id="gamePlayers"></div>
+  <button class="big" onclick="leaveRoom()">Opustiť miestnosť</button>
+</section>
+
+</div>
+</div>
+
+<script>
+let socket=null, room=null, myId=null, isHost=false;
+
+function connect(){
+  const protocol=location.protocol==="https:"?"wss:":"ws:";
+  socket=new WebSocket(protocol+"//"+location.host);
+  socket.onmessage=e=>{
+    const msg=JSON.parse(e.data);
+    if(msg.type==="created"||msg.type==="joined"){
+      myId=msg.playerId; room=msg.room; isHost=msg.hostId===myId;
+      if(msg.type==="created") openPanel("tasks"); else showLobby();
+    }
+    if(msg.type==="room"){
+      room=msg.room; isHost=room.hostId===myId;
+      if(room.status==="playing") showGame(); else showLobby();
+    }
+    if(msg.type==="error") alert(msg.message);
+  };
+  socket.onclose=()=>{ if(room) document.getElementById("lobbyStatus").textContent="Spojenie so serverom bolo prerušené."; };
+}
+function send(data){
+  if(!socket||socket.readyState!==WebSocket.OPEN){alert("Nie si pripojený k serveru.");return;}
+  socket.send(JSON.stringify(data));
+}
+function openPanel(id){
+  document.getElementById("modal").classList.add("show");
+  document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+  if(id==="tasks") renderTasks();
+}
+function closePanel(){document.getElementById("modal").classList.remove("show");}
+
+function createRoom(){
+  const name=document.getElementById("hostName").value.trim();
+  if(!name)return alert("Zadaj svoje meno.");
+  send({type:"create",name});
+}
+function joinRoom(){
+  const name=document.getElementById("playerName").value.trim();
+  const code=document.getElementById("roomCodeInput").value.trim().toUpperCase();
+  if(!name||!code)return alert("Zadaj meno aj kód miestnosti.");
+  send({type:"join",name,code});
+}
+
+function renderTasks(){
+  const box=document.getElementById("taskList");
+  if(!room||!room.tasks.length){
+    box.innerHTML='<div class="empty">Zatiaľ nemáš žiadne úlohy.</div>';
+  }else{
+    box.innerHTML=room.tasks.map((t,i)=>`
+      <div class="task">
+        <div><b>${i+1}. ${escapeHtml(t.name)}</b><small>📍 ${escapeHtml(t.location)}</small></div>
+        <button class="remove" onclick="removeTask(${i})">Odstrániť</button>
+      </div>`).join("");
+  }
+  document.getElementById("taskStatus").textContent=
+    room&&room.tasks.length ? "Počet úloh: "+room.tasks.length : "Pridaj aspoň jednu úlohu.";
+}
+function addTask(){
+  const location=document.getElementById("taskLocation").value.trim();
+  const name=document.getElementById("taskName").value.trim();
+  if(!location||!name)return alert("Musíš vyplniť miesto aj úlohu.");
+  send({type:"addTask",location,name});
+  document.getElementById("taskLocation").value="";
+  document.getElementById("taskName").value="";
+}
+function removeTask(index){send({type:"removeTask",index});}
+function continueToLobby(){
+  if(!room.tasks.length)return alert("Pred pokračovaním musíš pridať aspoň jednu úlohu.");
+  showLobby();
+}
+function showLobby(){
+  openPanel("lobby");
+  document.getElementById("roomCode").textContent=room.code;
+  document.getElementById("startBtn").style.display=isHost?"block":"none";
+  document.getElementById("editTasksBtn").style.display=isHost?"block":"none";
+  renderPlayers();
+  renderLobbyTasks();
+}
+function renderPlayers(){
+  const box=document.getElementById("players");
+  box.innerHTML=room.players.map((p,i)=>`
+    <div class="player"><span>${i+1}. ${escapeHtml(p.name)}</span><span>${p.id===room.hostId?"👑 HOST":""}</span></div>`).join("");
+  document.getElementById("lobbyStatus").textContent=
+    isHost?"Si hostiteľ. Keď sú všetci pripravení, spusti hru.":"Čakáš na hostiteľa, kým spustí hru.";
+}
+function renderLobbyTasks(){
+  document.getElementById("lobbyTasks").innerHTML=room.tasks.map((t,i)=>
+    `<div class="task compact"><div><b>${i+1}. ${escapeHtml(t.name)}</b><small>📍 ${escapeHtml(t.location)}</small></div></div>`).join("");
+}
+function startGame(){
+  if(!room.tasks.length)return alert("Najprv pridaj aspoň jednu úlohu.");
+  send({type:"start",code:room.code});
+}
+function showGame(){
+  openPanel("game");
+  const me=room.players.find(p=>p.id===myId);
+  document.getElementById("roleText").textContent=me&&me.role?"Tvoja úloha: "+me.role:"Hra bola spustená.";
+  document.getElementById("myTasks").innerHTML=me&&me.role==="Crewmate"
+    ?room.tasks.map(t=>`<div class="task compact"><div><b>${escapeHtml(t.name)}</b><small>📍 ${escapeHtml(t.location)}</small></div></div>`).join("")
+    :'<div class="empty">Ako Impostor úlohy nemáš.</div>';
+  document.getElementById("gamePlayers").innerHTML=room.players.map(p=>
+    `<div class="player"><span>${escapeHtml(p.name)}</span><span>${p.id===myId?"TY":""}</span></div>`).join("");
+}
+function leaveRoom(){send({type:"leave"});room=null;myId=null;isHost=false;openPanel("join");}
+function escapeHtml(s){return s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));}
+document.getElementById("modal").addEventListener("click",e=>{if(e.target.id==="modal")closePanel();});
+connect();
+</script>
+</body>
+</html>
