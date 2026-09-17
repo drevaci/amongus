@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Among Us – Multiplayer</title><link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><div class="brand">AMONG US</div><nav><button onclick="openPanel('create')">Vytvoriť</button><button class="red" onclick="openPanel('join')">Hrať</button></nav></header>
+<main><div class="card"><h1>Among Us</h1><p>Multiplayer hra cez internet.</p>
+<div class="buttons"><button class="big red" onclick="openPanel('create')">Vytvoriť hru</button><button class="big" onclick="openPanel('join')">Hrať</button></div>
+<p id="connection" class="connection">Pripájam sa k serveru…</p></div></main>
+
+<div id="modal" class="modal"><div class="modal-box"><button class="x" onclick="closePanel()">×</button>
+
+<section id="create" class="panel"><h2>Vytvoriť hru</h2>
+<p class="hint">Hostiteľ je iba hostiteľ – nehrá za žiadnu postavičku.</p>
+<button class="big red" onclick="createRoom()">Vytvoriť miestnosť</button></section>
+
+<section id="join" class="panel"><h2>Hrať</h2>
+<input id="playerName" maxlength="16" placeholder="Tvoje meno"><input id="roomCodeInput" maxlength="6" placeholder="Kód miestnosti">
+<h3>Vyber postavičku</h3><div id="joinColors" class="colors"></div>
+<button class="big red" onclick="joinRoom()">Pripojiť sa</button></section>
+
+<section id="tasks" class="panel"><h2>Úlohy</h2><p class="hint">Hostiteľ nastaví názov, miesto a presný postup úlohy.</p>
+<div id="taskList"></div>
+<div class="task-form"><input id="taskName" maxlength="60" placeholder="Názov úlohy"><input id="taskLocation" maxlength="30" placeholder="Miesto">
+<textarea id="taskDescription" maxlength="300" placeholder="Čo treba spraviť?"></textarea><button class="big" onclick="addTask()">＋ Pridať úlohu</button></div>
+<button class="big red" onclick="continueToLobby()">Pokračovať do lobby</button></section>
+
+<section id="lobby" class="panel"><h2>Miestnosť <span id="roomCode"></span></h2><p class="hint">Pošli kód hráčom.</p>
+<div class="host-only-note">👑 Ty si HOST – túto hru nehráś.</div>
+<h3>Hráči</h3><div id="players"></div>
+<div id="impostorSetting" class="impostor-setting"><label for="impostorCount"><b>Počet impostorov</b></label>
+<select id="impostorCount" onchange="setImpostors(this.value)"><option value="1">1 impostor</option><option value="2">2 impostori</option><option value="3">3 impostori</option></select></div>
+<h3>Úlohy</h3><div id="lobbyTasks"></div>
+<button class="big" onclick="openPanel('tasks')">Upraviť úlohy</button><button class="big red" onclick="startGame()">Spustiť hru</button><p id="lobbyStatus" class="status"></p></section>
+
+<section id="roleReveal" class="panel fullscreenish"><div class="role-card"><p>Tvoja rola je</p><div id="revealRole" class="role"></div><p class="hint">Hra začne o chvíľu…</p></div></section>
+
+<section id="game" class="panel game-panel"><div class="topline"><h2 id="myName"></h2><span id="myRoleBadge"></span></div>
+<div id="hostBoard" class="host-board hidden"><div class="host-title">👑 HOST MENU</div><p class="hint">Hostiteľ nehrá. Tu ovládaš priebeh hry.</p><div id="hostPlayers"></div>
+<button class="emergency" onclick="emergency()">⚠ EMERGENCY MEETING</button><button id="doAirHost" class="big air-action" onclick="doAir()" style="display:none">DO AIR</button><div id="airCounter" class="air-counter" style="display:none"></div></div>
+<div id="impostorControls" class="hidden"><div class="circle-row"><button id="killBtn" class="circle kill" onclick="kill()">KILL</button><button id="airBtn" class="circle air" onclick="air()">AIR</button></div><p id="cooldown" class="cooldown"></p></div>
+<div id="crewControls" class="hidden"><h3>Úlohy</h3><div id="myTasks"></div><button id="airPressBtn" class="big air-action" onclick="pressAir()" style="display:none">DO AIR</button></div>
+<div id="deadInfo" class="hidden"><h2 id="deadName"></h2><button id="deadReportBtn" class="dead-btn huge" onclick="deadReport()" style="display:none">DEAD BODY REPORT</button><div id="deadTasks"></div></div>
+<div id="gameStatus" class="status"></div></section>
+
+<section id="warning" class="panel overlay-panel"><div id="warningTitle"></div><div id="warningText"></div><button id="warningBtn" class="big red" onclick="dismissWarning()">Host: začať hlasovanie</button></section>
+<section id="voting" class="panel"><h2>HLASOVANIE</h2><p>Každý živý hráč môže hlasovať iba raz.</p><div id="voteList"></div><button id="skipBtn" class="skip" onclick="vote('SKIP')">SKIP</button><p id="voteStatus" class="status"></p></section>
+<section id="result" class="panel overlay-panel"><h1 id="resultText"></h1><p>Ďalšie kolo sa začne automaticky.</p></section>
+<section id="ended" class="panel overlay-panel"><h1 id="winTitle"></h1><h2 id="winSub"></h2><button class="big" onclick="location.reload()">Nová hra</button></section>
+</div></div>
+
+<script>
+let socket=null,room=null,myId=null,isHost=false,colors=[],selectedJoin='red',cooldownTimer=null,currentTaskPosition=0;
+
+function connect(){const protocol=location.protocol==='https:'?'wss:':'ws:';socket=new WebSocket(protocol+'//'+location.host);
+socket.onopen=()=>document.getElementById('connection').textContent='🟢 Server je pripojený';
+socket.onclose=()=>document.getElementById('connection').textContent='🔴 Spojenie so serverom bolo prerušené';
+socket.onerror=()=>document.getElementById('connection').textContent='🔴 Chyba pripojenia';
+socket.onmessage=e=>handle(JSON.parse(e.data));}
+function send(d){if(!socket||socket.readyState!==WebSocket.OPEN)return alert('Nie si pripojený k serveru.');socket.send(JSON.stringify(d));}
+function handle(m){
+ if(m.type==='error')return alert(m.message);
+ if(m.colors){colors=m.colors;renderColorPickers();}
+ if(m.type==='created'){myId=null;room=m.room;isHost=true;showLobby();}
+ if(m.type==='joined'){myId=m.playerId;room=m.room;isHost=false;showLobby();}
+ if(m.type==='state'){room=m.room;renderByState();}
+ if(m.type==='killCooldown')startCooldown(m.readyAt);
+ if(m.type==='gameOver'&&!isHost)showEnded(m.winner);
+}
+function renderByState(){if(!room)return;
+ if(isHost){
+   if(room.status==='lobby')showLobby();
+   else if(room.status==='warning')showWarning();
+   else if(room.status==='voting')showVoting();
+   else if(room.status==='result')showResult();
+   else if(room.status==='ended')showEndedHost(room.winner);
+   else showGame();
+   return;
+ }
+ const p=me();
+ if(room.status==='lobby')showLobby();
+ else if(room.status==='roleReveal')showRoleReveal();
+ else if(room.status==='warning'){
+   // All players see the warning. The player who reported the body keeps access to tasks.
+   showWarning();
+ }else if((room.status==='voting'||room.status==='result') && p && !p.alive){
+   // Dead players do not vote; after the warning is dismissed they return to their task.
+   showGame();
+ }else if(room.status==='playing'||room.status==='air')showGame();
+ else if(room.status==='voting')showVoting();
+ else if(room.status==='result')showResult();
+ else if(room.status==='ended')showEnded(room.winner);
+}
+function openPanel(id){document.getElementById('modal').classList.add('show');document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));const el=document.getElementById(id);if(el)el.classList.add('active');if(id==='tasks')renderTasks();}
+function closePanel(){document.getElementById('modal').classList.remove('show');}
+const DEFAULT_COLORS=[{name:'Červená',key:'red',hex:'#e53935'},{name:'Modrá',key:'blue',hex:'#42a5f5'},{name:'Zelená',key:'green',hex:'#43a047'},{name:'Ružová',key:'pink',hex:'#ec407a'},{name:'Oranžová',key:'orange',hex:'#fb8c00'},{name:'Žltá',key:'yellow',hex:'#fdd835'},{name:'Čierna',key:'black',hex:'#424242'},{name:'Biela',key:'white',hex:'#eeeeee'},{name:'Fialová',key:'purple',hex:'#8e24aa'},{name:'Hnedá',key:'brown',hex:'#795548'},{name:'Tyrkysová',key:'cyan',hex:'#26c6da'},{name:'Limetková',key:'lime',hex:'#7cb342'},{name:'Tmavomodrá',key:'navy',hex:'#3949ab'},{name:'Sivá',key:'gray',hex:'#78909c'},{name:'Korálová',key:'coral',hex:'#ff7043'}];
+colors=DEFAULT_COLORS;
+function renderColorPickers(){const box=document.getElementById('joinColors');if(!box)return;box.innerHTML=colors.map(c=>`<button type="button" class="color-choice" data-color="${c.key}" onclick="selectColor('${c.key}')"><img src="icons/${c.key}.svg"><span>${c.name}</span></button>`).join('');markSelected();}
+function selectColor(key){selectedJoin=key;markSelected();}
+function markSelected(){document.querySelectorAll('#joinColors .color-choice').forEach(b=>b.classList.toggle('selected',b.dataset.color===selectedJoin));}
+function createRoom(){send({type:'create'});}
+function joinRoom(){const name=document.getElementById('playerName').value.trim(),code=document.getElementById('roomCodeInput').value.trim().toUpperCase();if(!name||!code)return alert('Zadaj meno aj kód.');send({type:'join',name,code,color:selectedJoin,icon:selectedJoin});}
+function showLobby(){openPanel('lobby');document.getElementById('roomCode').textContent=room.code;document.getElementById('lobbyStatus').textContent=isHost?'👑 Hostiteľská obrazovka – čakám na hráčov.':'Čakáš na začiatok hry.';document.getElementById('impostorSetting').style.display=isHost?'flex':'none';document.getElementById('impostorCount').disabled=!isHost;document.getElementById('impostorCount').value=room.impostorCount||1;renderPlayers();renderLobbyTasks();}
+function renderPlayers(){document.getElementById('players').innerHTML=room.players.map(p=>`<div class="player"><span class="mini"><img class="avatar-img" src="icons/${p.color}.svg">${esc(p.name)}</span></div>`).join('')||'<div class="empty">Zatiaľ sa nikto nepripojil.</div>';}
+function setImpostors(v){send({type:'setImpostors',count:Number(v)});}
+function renderLobbyTasks(){document.getElementById('lobbyTasks').innerHTML=room.tasks.map((t,i)=>`<details class="task-dropdown"><summary><b>${i+1}. ${esc(t.name)}</b><small>📍 ${esc(t.location)}</small></summary><div class="task-description">${esc(t.description)}</div></details>`).join('')||'<div class="empty">Žiadne úlohy.</div>';}
+function renderTasks(){document.getElementById('taskList').innerHTML=room.tasks.map((t,i)=>`<details class="task-dropdown host-task"><summary><b>${i+1}. ${esc(t.name)}</b><small>📍 ${esc(t.location)}</small></summary><div class="task-description">${esc(t.description)}</div><button class="remove" onclick="removeTask(${i})">Odstrániť</button></details>`).join('')||'<div class="empty">Zatiaľ žiadne úlohy.</div>';}
+function addTask(){const name=document.getElementById('taskName').value.trim(),location=document.getElementById('taskLocation').value.trim(),description=document.getElementById('taskDescription').value.trim();if(!name||!location||!description)return alert('Vyplň všetky tri časti úlohy.');send({type:'addTask',name,location,description});document.getElementById('taskName').value='';document.getElementById('taskLocation').value='';document.getElementById('taskDescription').value='';}
+function removeTask(i){send({type:'removeTask',index:i});}
+function continueToLobby(){if(!room.tasks.length)return alert('Pridaj aspoň jednu úlohu.');showLobby();}
+function startGame(){send({type:'start'});}
+function me(){return room?.players.find(p=>p.id===myId)||null;}
+function showRoleReveal(){const p=me();if(!p)return showGame();openPanel('roleReveal');document.getElementById('revealRole').textContent=p.role;document.getElementById('revealRole').className='role '+(p.role==='Impostor'?'imp':'crew');}
+function showGame(){openPanel('game');
+ if(isHost){
+   document.getElementById('myName').textContent='HOST';
+   document.getElementById('myRoleBadge').textContent='VIP';
+   document.getElementById('hostBoard').classList.remove('hidden');
+   document.getElementById('impostorControls').classList.add('hidden');
+   document.getElementById('crewControls').classList.add('hidden');
+   document.getElementById('deadInfo').classList.add('hidden');
+   renderHostBoard();return;
+ }
+ const p=me();if(!p)return;
+ document.getElementById('myName').textContent=p.name;
+ document.getElementById('myRoleBadge').textContent=p.role;
+ document.getElementById('hostBoard').classList.add('hidden');
+ document.getElementById('impostorControls').classList.toggle('hidden',p.role!=='Impostor'||!p.alive);
+ document.getElementById('crewControls').classList.toggle('hidden',p.role!=='Crewmate'||!p.alive);
+ document.getElementById('deadInfo').classList.toggle('hidden',p.alive);
+ if(p.role==='Crewmate')renderTasksForMe();
+ document.getElementById('gameStatus').textContent=room.status==='air'?'⚠ AIR SABOTÁŽ':'';
+ document.getElementById('airPressBtn').style.display=room.status==='air'&&p.role==='Crewmate'&&p.alive?'block':'none';
+ if(p.role==='Impostor')startCooldown(p.killReadyAt||0);
+}
+function renderHostBoard(){document.getElementById('hostPlayers').innerHTML=room.players.map(p=>`<div class="host-row"><span class="mini"><img class="avatar-img small" src="icons/${p.color}.svg">${esc(p.name)}</span><span class="alive-dot ${p.alive?'alive':'dead'}"></span><span class="task-count">${p.tasksCompleted.length}/${room.tasks.length}</span>${p.alive&&room.status==='playing'?`<button class="mark-dead" onclick="markDead('${p.id}')">Označiť DEAD</button>`:''}</div>`).join('');document.getElementById('doAirHost').style.display=room.status==='air'?'block':'none';document.getElementById('airCounter').style.display=room.status==='air'?'block':'none';if(room.status==='air')updateAirCounter();}
+
+function getTaskOrder(p){
+ if(!p)return [];
+ if(Array.isArray(p.taskOrder)&&p.taskOrder.length)return p.taskOrder;
+ return room.tasks.map((_,i)=>i);
+}
+function currentTaskFor(p){
+ const order=getTaskOrder(p);
+ while(currentTaskPosition<order.length && p.tasksCompleted.includes(order[currentTaskPosition])) currentTaskPosition++;
+ if(currentTaskPosition>=order.length)return null;
+ return {index:order[currentTaskPosition],position:currentTaskPosition+1,total:order.length};
+}
+function renderOneCrewTask(containerId){
+ const p=me(),box=document.getElementById(containerId);
+ if(!p||!box)return;
+ const cur=currentTaskFor(p);
+ if(!cur){
+   box.innerHTML='<div class="all-tasks-done">✅ Všetky tvoje úlohy sú hotové!</div>';
+   return;
+ }
+ const t=room.tasks[cur.index];
+ box.innerHTML=`<div class="single-task-card">
+   <div class="task-progress">Úloha ${cur.position} / ${cur.total}</div>
+   <h3>${esc(t.name)}</h3>
+   <div class="task-location">📍 ${esc(t.location)}</div>
+   <details class="task-dropdown" open>
+     <summary>Čo treba spraviť</summary>
+     <div class="task-description">${esc(t.description)}</div>
+   </details>
+   <button class="big task-complete-btn" onclick="completeCurrentTask('${containerId}')">HOTOVO</button>
+ </div>`;
+}
+function renderTasksForMe(){renderOneCrewTask('myTasks');}
+function renderDeadInfo(){
+ const p=me();
+ document.getElementById('deadName').textContent=p.name;
+ // The report button is only shown until the dead player uses it.
+ document.getElementById('deadReportBtn').style.display=p.reportReady?'block':'none';
+ renderOneCrewTask('deadTasks');
+}
+function completeCurrentTask(containerId='myTasks'){
+ const p=me(),cur=currentTaskFor(p);
+ if(!p||!cur)return;
+ send({type:'completeTask',index:cur.index});
+ currentTaskPosition++;
+ setTimeout(()=>renderOneCrewTask(containerId),50);
+}
+function markDead(id){send({type:'markDead',playerId:id});}
+function kill(){send({type:'kill'});}
+function air(){send({type:'air'});}
+function startCooldown(until){clearInterval(cooldownTimer);const b=document.getElementById('killBtn');if(!b)return;function tick(){const left=Math.max(0,until-Date.now());b.disabled=left>0;document.getElementById('cooldown').textContent=left?`KILL cooldown: ${Math.ceil(left/1000)} s`:'KILL je pripravený';if(!left)clearInterval(cooldownTimer);}tick();if(until>Date.now())cooldownTimer=setInterval(tick,250);}
+function pressAir(){send({type:'airPress'});}
+function doAir(){send({type:'doAir'});}
+function updateAirCounter(){const n=room.players.filter(p=>p.role==='Crewmate'&&p.alive).length;document.getElementById('airCounter').textContent=`DO AIR: ${room.airCount}/${n}`;}
+function deadReport(){send({type:'deadReport'});}
+function emergency(){send({type:'emergency'});}
+function showAir(){showGame();}
+function showWarning(){openPanel('warning');const host=room.warning?.kind==='emergency';document.getElementById('warningTitle').textContent=host?'EMERGENCY MEETING':'DEAD BODY REPORT';const reporter=room.warning?.reporterId?room.players.find(p=>p.id===room.warning.reporterId):null;document.getElementById('warningText').textContent=host?'Hostiteľ spustil emergency meeting.':(reporter?`${esc(reporter.name)} nahlásil DEAD BODY REPORT.`:'Niekto nahlásil DEAD BODY REPORT.');document.getElementById('warningBtn').style.display=isHost?'block':'none';}
+function dismissWarning(){if(isHost)send({type:'dismissWarning'});}
+function showVoting(){openPanel('voting');const eligible=room.voting?.eligible||[];const voted=room.voting?.votes?.[myId];const list=document.getElementById('voteList');list.innerHTML=room.players.filter(p=>eligible.includes(p.id)).map(p=>`<button class="vote-player" onclick="vote('${p.id}')" ${voted?'disabled':''}><img class="avatar-img" src="icons/${p.color}.svg"><b>${esc(p.name)}</b></button>`).join('');document.getElementById('skipBtn').style.display=isHost?'none':'block';document.getElementById('voteStatus').textContent=isHost?`HOST – ${Object.keys(room.voting?.votes||{}).length}/${eligible.length} hlasov`:(voted?'Hlasoval si. Čaká sa na ostatných.':`${Object.keys(room.voting?.votes||{}).length}/${eligible.length} hlasov`);}
+function vote(t){if(!isHost)send({type:'vote',target:t});}
+function showResult(){openPanel('result');document.getElementById('resultText').textContent=room.result?.text||'';}
+function showEnded(winner){const p=me();openPanel('ended');document.getElementById('winTitle').textContent=p&&p.role===winner?'YOU WON':'YOU LOST';document.getElementById('winSub').textContent=winner==='Crewmates'?'Crewmates vyhrali!':'Impostors vyhrali!';}
+function showEndedHost(winner){openPanel('ended');document.getElementById('winTitle').textContent='GAME OVER';document.getElementById('winSub').textContent=winner==='Crewmates'?'Crewmates vyhrali!':'Impostors vyhrali!';}
+function colorHex(k){return colors.find(c=>c.key===k)?.hex||'#888';}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
+document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closePanel();});
+renderColorPickers();connect();
+</script></body></html>
